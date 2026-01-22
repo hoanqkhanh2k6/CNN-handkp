@@ -1,0 +1,83 @@
+self.conv1 = nn.Conv2d(3, 32, 3, stride=1, padding=1)  # -> (batch,32,180,320)
+        self.bnorm1 = nn.BatchNorm2d(32)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2, 2)  # -> (batch,32,90,160)
+
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=1, padding=1)  # -> (batch,64,90,160)
+        self.bnorm2 = nn.BatchNorm2d(64)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2, 2)  # -> (batch,64,45,80)
+
+        self.conv4 = nn.Conv2d(64, 128, 3, stride=1, padding=1)  # -> (batch,128,45,80)
+        self.bnorm4 = nn.BatchNorm2d(128)
+        self.relu4 = nn.ReLU()
+        self.pool4 = nn.MaxPool2d(2, 2)  # -> (batch,128,22,40)
+
+        self.conv5 = nn.Conv2d(128, 256, 3, stride=1, padding=1)  # -> (batch,256,22,40)
+        self.bnorm5 = nn.BatchNorm2d(256)
+        self.relu5 = nn.ReLU()
+        self.pool5 = nn.MaxPool2d(2,2)  # -> (batch,256,11,20)
+        
+        self.conv7 = nn.Conv2d(256, 512, 3, stride=1, padding=1)  # -> (batch,256,11,20)
+        self.bnorm7 = nn.BatchNorm2d(512)
+        self.relu7 = nn.ReLU()
+        self.pool7 = nn.AdaptiveAvgPool2d((2,2))  # -> (batch,512,1,1)
+
+        
+
+    ## Fully connected layer
+        self.fully1 = nn.Linear(512*2*2,512*2)
+        self.relu_1 = nn.ReLU()
+        self.Dropout1 = nn.Dropout(p=0.3)
+
+        self.fully2 = nn.Linear(512*2,512)
+        self.relu_2 = nn.ReLU()
+        self.Dropout2 = nn.Dropout(p=0.3)
+        
+        self.fully3 = nn.Linear(512,256*1)
+        self.relu_3 = nn.ReLU()
+        
+        self.fully4 = nn.Linear(256*1,21*3) #21 điểm keypoint, mỗi điểm có 3 giá trị (x,y,z)
+        self.sigmoid = nn.Sigmoid()
+
+Epoch [1/10], Loss: 506.05515648424625
+Time for 1 epoch: 135.81042408943176 seconds
+Epoch [2/10], Loss: 399.45996110886335
+Epoch [9/10], Loss: 195.8854452073574
+Epoch [10/10], Loss: 178.14902390912175
+#mạng sâu nên học chậm?
+Epoch [1/8], Loss: 166.705887388438
+Epoch [2/8], Loss: 162.7533551696688
+Epoch [6/8], Loss: 143.28825540468097
+Time for 1 epoch: 128.765638589859 seconds
+Epoch [7/8], Loss: 128.65360856056213
+Epoch [8/8], Loss: 130.4891717564314
+
+lr = 0.0001
+Epoch [1/8], Loss: 114.81073918193579
+Epoch [8/8], Loss: 92.39515445567667
+
+lr = 0.001
+Epoch [1/8], Loss: 117.83998396247625
+Epoch [7/8], Loss: 105.57606771402061
+Epoch [8/8], Loss: 107.35690351761878
+
+lr =  0.0001
+Epoch [1/8], Loss: 91.1358748767525
+Epoch [8/8], Loss: 73.2843374600634
+
+Epoch [1/5], Loss: 73.87404461670667
+Epoch [5/5], Loss: 70.1611836636439
+
+lr = 0.001
+Epoch [8/8], Loss: 89.73850692436099
+lr = 0.0001
+Epoch [1/8], Loss: 76.78654329571873
+Epoch [2/8], Loss: 72.65794929396361
+Epoch [3/8], Loss: 66.61407174635679
+Epoch [8/8], Loss: 63.35269212257117
+
+Epoch [1/8], Loss: 62.01744805276394
+
+lr = 0.001
+Epoch [8/8], Loss: 69.24295251630247

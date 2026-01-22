@@ -1,0 +1,49 @@
+self.loss = 0
+        self.time = 0
+        super(Network,self).__init__() #khởi tạo constructor
+    # x input shape example: (batch, 3, 180, 320)
+        self.conv1 = nn.Conv2d(3, 32, 3, stride=1,padding = 1)  # -> (batch,32,180,320)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2, 2)  # -> (batch,32,90,160)
+
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=1,padding = 1)  # -> (batch,64,90,160)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2, 2)  # -> (batch,64,46,80)
+        
+    
+        self.conv3 = nn.Conv2d(64, 128, 3, stride=1,padding = 1)  # -> (batch,128,45,80)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.relu3 = nn.ReLU()
+        #self.pool3 = nn.MaxPool2d(2,2)  # -> (batch,128,23,40)
+
+        self.conv4 = nn.Conv2d(128, 256, 3, stride=1,padding = 1)  # -> (batch,256,45,80)
+        self.bn4 = nn.BatchNorm2d(256)
+        self.relu4 = nn.ReLU()
+
+        
+        self.conv5 = nn.Conv2d(256,128, 3, stride=1,padding = 1)  # -> (batch,128,45,80)
+        self.bn5 = nn.BatchNorm2d(128)
+        self.relu5 = nn.ReLU()
+
+
+        self.conv6 = nn.Conv2d(128,21, 3, stride=1,padding = 1)  # -> (batch,21,45,80) đầu ra 21 cho 21 heatmap
+
+        #for z from here
+
+        #self.bn6 = nn.BatchNorm2d(63)
+        #self.relu6 = nn.ReLU()
+        
+        self.cov7 = nn.Conv2d(21,21, 3, stride=1,padding = 1)  # -> (batch,63,45,80) đầu ra 63 cho 21 điểm (x,y,vis)
+        self.bn_7 = nn.BatchNorm2d(21)
+        self.relu7 = nn.ReLU()
+        self.pool7 = nn.MaxPool2d(2,2)  # -> (batch,21,22,40)
+        
+        self.cov8 = nn.Conv2d(21,21, 3, stride=1,padding = 1)  # -> (batch,63,22,40) đầu ra 63 cho 21 điểm (x,y,vis)
+        self.pool8 = nn.AdaptiveAvgPool2d((1,1))  # -> (batch,21,1,1)
+        self.sigmoid = nn.Sigmoid()
+
+
+poch [1/8], Loss: 400.23611375689507
+Epoch [2/8], Loss: 274.0230164080858

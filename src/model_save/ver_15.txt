@@ -1,0 +1,50 @@
+super(Network,self).__init__() #khởi tạo constructor
+    # x input shape example: (batch, 3, 180, 320)
+        self.conv1 = nn.Conv2d(3, 32, 3, stride=1, padding=1)  # -> (batch,32,180,320)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2, 2)  # -> (batch,32,90,160)
+
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=1, padding=1)  # -> (batch,64,90,160)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2, 2)  # -> (batch,64,45,80)
+
+        self.conv4 = nn.Conv2d(64, 128, 3, stride=1, padding=1)  # -> (batch,128,45,80)
+        self.relu4 = nn.ReLU()
+        self.pool4 = nn.MaxPool2d(2, 2)  # -> (batch,128,22,40)
+
+        self.conv5 = nn.Conv2d(128, 256, 3, stride=1, padding=1)  # -> (batch,256,22,40)
+        self.relu5 = nn.ReLU()
+        self.pool5 = nn.MaxPool2d(2, 2)  # -> (batch,256,11,20)
+
+        self.conv6 = nn.Conv2d(256,256, 3, stride=1, padding=1)  # -> (batch,256,11,20)
+        self.relu6 = nn.ReLU()
+        self.pool6 = nn.MaxPool2d(2, 2)  # -> (batch,256,5,10)
+
+
+        self.conv7 = nn.Conv2d(256, 512, 3, stride=1, padding=1)  # -> (batch,512,5,10)
+        self.relu7 = nn.ReLU()
+        self.pool7 = nn.AdaptiveAvgPool2d((2, 2))  # -> (batch,512,2,2)
+
+
+
+    ## Fully connected layer
+        self.fully1 = nn.Linear(512*2*2,256*2)
+        self.relu_1 = nn.ReLU()
+        self.Dropout1 = nn.Dropout(p=0.4)
+
+
+        self.fully3 = nn.Linear(256*2,256*1)
+        self.relu_3 = nn.ReLU()
+
+        self.fully4 = nn.Linear(256*1,21*3) #21 điểm keypoint, mỗi điểm có 3 giá trị (x,y,z)
+        self.sigmoid = nn.Sigmoid()
+
+Epoch [1/10], Loss: 658.3245689123869
+Time for 1 epoch: 132.69810819625854 seconds
+Epoch [2/10], Loss: 642.0889744311571
+Epoch [6/10], Loss: 231.88899024017155
+Epoch [10/10], Loss: 176.83122540730983
+
+lr = 0.0005
+Epoch [3/10], Loss: 130.3796915099956
+Epoch [10/10], Loss: 103.14090483309701
