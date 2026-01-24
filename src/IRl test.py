@@ -11,15 +11,16 @@ import numpy as np
 import dataset_class
 
 
-net = load_model_to_val(net,r"D:\VS Code\vs_code\python\A4\project - Sera CV\model_save\ver_0.23_13.pth")
+net = load_model_to_val(net,r"CNN-repo\src\model_save_2\ver_0.4.9.pth")
+net = net.to("cuda:0")
+
 
 Mean = [0.3799, 0.3541, 0.3407]
 Std = [0.3728, 0.3592, 0.3544]
 
 #output = net.forward(input)
-#img_path = r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\train\IMG_00000001.jpg"
-img_path = r"D:\VS Code\vs_code\python\A4\project - Sera CV\IRL dataset\IMG_6428 (1) (1).jpg"
-#label_path = r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels\train\IMG_00000001.txt"
+img_path = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\val\IMG_00000002.jpg"
+#img_path = r"D:\VS Code\prj-cnn-handkp\CNN-repo\src\IRL dataset\IMG_6428 (1) (1).jpg"
 img = Image.open(img_path)
 # apply EXIF orientation if present
 img = ImageOps.exif_transpose(img)
@@ -85,6 +86,40 @@ for i in range(len(hand_key)):
             plt.plot(hand_key[i][0],hand_key[i][1],'yo') #yellow for medium confidence
         else:
             plt.plot(hand_key[i][0],hand_key[i][1],'go') #green for high confidence
+
+# Helper to draw a line between two 1-based keypoint indices when both are visible
+def draw_segment(idx_a_1b, idx_b_1b, color='cyan'):
+    idx_a = idx_a_1b - 1
+    idx_b = idx_b_1b - 1
+    if idx_a < 0 or idx_b < 0 or idx_a >= len(hand_key) or idx_b >= len(hand_key):
+        return
+    if hand_key[idx_a][2] != 0 and hand_key[idx_b][2] != 0:
+        plt.plot([hand_key[idx_a][0], hand_key[idx_b][0]],
+                 [hand_key[idx_a][1], hand_key[idx_b][1]],
+                 color=color, linewidth=1.5, linestyle='-')
+
+# Connect 1→2→3→4
+for idx in range(1, 5):
+    draw_segment(idx, idx + 1)
+
+# Connect 1→5
+draw_segment(1, 6)
+
+# Connect 5→6→...→21
+for idx in range(6, 9):
+    draw_segment(idx, idx + 1)
+draw_segment(6, 10)
+
+for idx in range(10, 13):
+    draw_segment(idx, idx + 1)
+draw_segment(10,14)
+for idx in range(14, 17):
+    draw_segment(idx, idx + 1)
+draw_segment(14, 18)
+for idx in range(18, 21):
+    draw_segment(idx, idx + 1)
+
+
 #print(hand_key)
 #plt.imshow(img_.resize((1920,1080)))
 

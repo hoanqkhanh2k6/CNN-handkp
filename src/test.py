@@ -14,7 +14,7 @@ torch.manual_seed(42)
 np.random.seed(42)
 #random.seed(42)
     
-with open (r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels\train\IMG_00000001.txt","r") as f:
+with open (r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels\train\IMG_00000001.txt","r") as f:
     lines = f.read()
     tag = lines.split(" ")
 
@@ -33,7 +33,7 @@ with open (r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoin
 
     print(lst_)
     
-img_path = r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\train\IMG_00000001.jpg"
+img_path = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\train\IMG_00000001.jpg"
 img = Image.open(img_path)
 pad = dataset_class.PaddingImage((180,180))
 padded = pad(img,40,"val")

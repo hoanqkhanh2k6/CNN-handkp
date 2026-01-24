@@ -1,0 +1,174 @@
+class SoftArgmax2D(nn.Module):
+    """Soft-argmax 2D với nhiệt độ học được để tăng độ sắc của đỉnh phân bố."""
+    def __init__(self, temperature: float = 0.5):
+        super().__init__()
+        # Dùng log-temperature để đảm bảo nhiệt độ luôn dương khi tối ưu
+        self.log_temperature = nn.Parameter(torch.log(torch.tensor(float(temperature))))
+
+    def forward(self, x: torch.Tensor):
+        # x: (B, C, H, W)
+        b, c, h, w = x.size()
+        x_flat = x.view(b, c, -1)
+        # ổn định số học và kiểm soát nhiệt độ (clamp phạm vi hợp lý)
+        temperature = torch.clamp(torch.exp(self.log_temperature), min=1e-3, max=10.0)
+        x_scaled = x_flat / temperature
+        x_scaled = x_scaled - x_scaled.max(dim=-1, keepdim=True).values
+        softmaxed = F.softmax(x_scaled, dim=-1)
+
+        yy = torch.linspace(0, h - 1, h, device=x.device, dtype=x.dtype).view(1, 1, h, 1).expand(b, c, h, w).contiguous().view(b, c, -1)
+        xx = torch.linspace(0, w - 1, w, device=x.device, dtype=x.dtype).view(1, 1, 1, w).expand(b, c, h, w).contiguous().view(b, c, -1)
+
+        y_norm = (softmaxed * yy).sum(dim=-1) / (h - 1)
+        x_norm = (softmaxed * xx).sum(dim=-1) / (w - 1)
+        return y_norm, x_norm
+
+
+class Network(nn.Module):
+    def __init__(self):
+        self.loss = 0
+        self.time = 0
+        super(Network,self).__init__() #khởi tạo constructor
+
+    # x input shape example: (batch, 3, 180, 320)
+        self.conv1 = nn.Conv2d(3, 32, 3, stride=1,padding = 1)  # -> (batch,32,180,320)
+        self.bn1 = nn.GroupNorm(8, 32)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2, 2)  # -> (batch,32,90,160)
+
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=1,padding = 1)  # -> (batch,64,90,160)
+        self.bn2 = nn.GroupNorm(8, 64)
+        self.relu2 = nn.ReLU()
+        
+        self.conv3 = nn.Conv2d(64, 128, 3, stride=1,padding = 1)  # -> (batch,128,45,80)
+        self.bn3 = nn.GroupNorm(16, 128)
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(2,2)  # -> (batch,128,45,80)
+        
+
+        self.conv4 = nn.Conv2d(128, 256, 3, stride=1,padding = 1)  # -> (batch,256,45,80)
+        self.bn4 = nn.GroupNorm(16, 256)
+        self.relu4 = nn.ReLU()
+
+        self.conv5 = nn.Conv2d(256,128, 3, stride=1,padding = 1)  # -> (batch,128,45,80)
+        self.bn5 = nn.GroupNorm(16, 128)
+        self.relu5 = nn.ReLU()
+        
+        
+        self.convskip = nn.Conv2d(64,128, 1, stride=1,padding = 0)  # -> (batch,128,45,80)
+        self.bnskip = nn.GroupNorm(16, 128)
+        
+        self.conv6 = nn.Conv2d(128,64, 3, stride=1,padding = 1)
+        self.bn6 = nn.GroupNorm(8, 64)
+        self.relu6 = nn.ReLU()
+        
+        # Tăng độ phân giải heatmap: từ (45x80) lên (90x160)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+
+        # Skip connection từ tầng sớm (64 kênh, 90x160) về 128 kênh, 45x80
+        self.pool_skip = nn.MaxPool2d(2,2)
+
+        # CoordConv: thêm kênh tọa độ x/y chuẩn hóa
+        self.out = nn.Conv2d(64 + 2, 21, 1, stride=1, padding=0)  # sinh 21 heatmap
+
+        # Giảm overfitting nhẹ trước head heatmap
+        self.dropout = nn.Dropout2d(p=0.1)
+        
+        self.cov7 = nn.Conv2d(21,21, 3, stride=1,padding = 1)
+        self.bn_7 = nn.GroupNorm(7, 21)
+        self.relu7 = nn.ReLU()
+        self.pool7 = nn.MaxPool2d(2,2)
+        
+        self.cov8 = nn.Conv2d(21,21, 3, stride=1,padding = 1)
+        self.pool8 = nn.AdaptiveAvgPool2d((1,1))  # -> (batch,21,1,1)
+        self.sigmoid = nn.Sigmoid()
+
+        # Soft-argmax cố định cho suy tọa độ
+        self.soft_argmax = SoftArgmax2D(temperature=0.3)
+
+    def _coord_channels(self, b: int, h: int, w: int, device, dtype):
+        yy = torch.linspace(0, h - 1, h, device=device, dtype=dtype) / (h - 1)
+        xx = torch.linspace(0, w - 1, w, device=device, dtype=dtype) / (w - 1)
+        yy = yy.view(1, 1, h, 1).expand(b, 1, h, w)
+        xx = xx.view(1, 1, 1, w).expand(b, 1, h, w)
+        return yy, xx
+    def num_flat_features(self,x):
+        size = x.size()[1:]  #all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
+    
+    def forward(self,x):
+        # stem
+        x = self.conv1(x) 
+        x = self.bn1(x)
+        x = self.relu1(x)
+        x = self.pool1(x)
+        
+        x = self.conv2(x)
+        x = self.bn2(x) 
+        x = self.relu2(x)
+        x2 = x  # lưu đặc trưng sớm (B,64,90,160)
+    
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.relu3(x)
+        x = self.pool3(x)
+        
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = self.relu4(x)
+
+        x = self.conv5(x)
+        x = self.bn5(x)
+        x = self.relu5(x)
+
+        # skip: đưa x2 về cùng không gian và cộng với dòng chính
+        x_skip = self.pool_skip(x2)              # (B,64,45,80)
+        x_skip = self.convskip(x_skip)           # (B,128,45,80)
+        x_skip = self.bnskip(x_skip)
+        x = x + x_skip
+        
+        x = self.conv6(x)
+        x = self.bn6(x)
+        x = self.relu6(x)
+        
+        # tăng độ phân giải heatmap
+        f = self.upsample(x)
+
+        # thêm kênh tọa độ (CoordConv)
+        b, _, h, w = f.size()
+        yy, xx = self._coord_channels(b, h, w, f.device, f.dtype)
+        f = torch.cat([f, yy, xx], dim=1)
+        f = self.dropout(f)
+
+        heatmaps = self.out(f)  # (B, 21, H, W)
+
+        # tọa độ bằng soft-argmax
+        y_norm, x_norm = self.soft_argmax(heatmaps)
+        
+        z = self.cov7(heatmaps)
+        z = self.bn_7(z)
+        z = self.relu7(z)
+        z = self.pool7(z)
+        
+        
+        z = self.cov8(z)
+        z = self.pool8(z)
+        
+        z = self.sigmoid(z)
+        
+        out = torch.cat((x_norm.unsqueeze(-1), y_norm.unsqueeze(-1), z.view(z.size(0), z.size(1), -1)), dim=-1)
+        return out.reshape(-1,63)
+
+Time for 1 epoch: 465.38162112236023 seconds
+Epoch [1/8], Loss: 256.767749309539
+Epoch [2/8], Loss: 168.19216314330697
+Epoch [3/8], Loss: 142.74226880818605
+Epoch [8/8], Loss: 88.79376302659512
+
+Epoch [1/5], Loss: 85.53384759649634
+Epoch [5/5], Loss: 72.82541461195797
+lr = 0.0001
+
+

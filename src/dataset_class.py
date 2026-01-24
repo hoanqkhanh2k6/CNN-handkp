@@ -21,7 +21,7 @@ np.random.seed(42)
 random.seed(42)
 
 
-pad_img_path  = [r"D:\VS Code\vs_code\python\A4\project - Sera CV\pad_img\IMG_6437.jpg",]
+pad_img_path  = [r"CNN-repo\src\pad_img\IMG_6437.jpg",]
 pad_img = Image.open(pad_img_path[0])
 
 class PaddingImage:
@@ -52,7 +52,7 @@ paddingImage = PaddingImage((180,180))
 
 def make_listdata(phase = "train"):
     # use absolute path like get_label to avoid relative-path mistakes
-    rootpath = r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images"
+    rootpath = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images"
     target_path = osp.join(rootpath,phase,'*.jpg')
     path_list =[]
     for path in glob.glob(target_path):
@@ -60,7 +60,7 @@ def make_listdata(phase = "train"):
     return path_list
 
 def get_label(phase):
-    rootpath = r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels"
+    rootpath = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels"
 
     label_list =[]
     target_path = osp.join(rootpath,phase,'*.txt')
@@ -191,7 +191,7 @@ def get_len_batch(batch_size,phase = "train"):
         dataset = Dataset(data_list=list_val, labels_list=labels_val, transform=data_transform, phase='val')
         return int(dataset.__len__() / batch_size)
 
-#test = Image.open(r"D:\VS Code\vs_code\python\A4\project - Sera CV\dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\train\IMG_00000001.jpg")
+#test = Image.open(r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images\train\IMG_00000001.jpg")
 
 #test = paddingImage(test,40,"val")
 
@@ -199,7 +199,6 @@ def get_len_batch(batch_size,phase = "train"):
 
 #img_np = test.permute(1, 2, 0).cpu().numpy()  # [H, W, C], [0,1]
 #img_np = (img_np * 255).clip(0, 255).astype(np.uint8)
-
 #img_pil = Image.fromarray(img_np)
 #plt.imshow(img_pil)
 #plt.show()
