@@ -11,13 +11,16 @@ class SoftArgmax2D(nn.Module):
 
     def __init__(self, temperature: float = 0.5):
         super().__init__()
-        self.temperature = float(temperature)
+        # Học nhiệt độ (log-param) để tối ưu độ sắc của heatmap an toàn
+        self.log_temperature = nn.Parameter(torch.log(torch.tensor(float(temperature))))
 
     def forward(self, x: torch.Tensor):
         # x: (B, C, H, W)
         b, c, h, w = x.size()
         x_flat = x.view(b, c, -1)
-        x_scaled = x_flat / max(self.temperature, 1e-6)
+        # temperature học được, clamp để ổn định số học
+        temperature = torch.clamp(torch.exp(self.log_temperature), min=1e-3, max=10.0)
+        x_scaled = x_flat / temperature
         x_scaled = x_scaled - x_scaled.max(dim=-1, keepdim=True).values
         softmaxed = F.softmax(x_scaled, dim=-1)
 
@@ -43,81 +46,145 @@ class SoftArgmax2D(nn.Module):
 
 class Network(nn.Module):
     def __init__(self, num_keypoints: int = 21, pretrained: bool = True):
+        
+        self.epoch = 0
+        self.temperature = 0.5
+        
         super().__init__()
+        # Dùng backbone ResNet34 nhẹ hơn 
         weights = (
-            torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            torchvision.models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
         )
-        resnet = torchvision.models.resnet18(weights=weights)
-
-        # Encoder lấy trực tiếp từ ResNet18
-        self.enc1 = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu)  # (B, 64, H/2, W/2)
-        self.enc2 = nn.Sequential(resnet.maxpool, resnet.layer1)  # (B, 64, H/4, W/4)
-        self.enc3 = resnet.layer2  # (B, 128, H/8, W/8)
-        self.enc4 = resnet.layer3  # (B, 256, H/16, W/16)
-        self.enc5 = resnet.layer4  # (B, 512, H/32, W/32)
+        resnet = torchvision.models.resnet34(weights=weights)
+        # Encoder lấy trực tiếp từ ResNet34
+        self.stemp = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu)  # (B, 64, 90, 160)
+        self.enc2 = nn.Sequential(resnet.maxpool, resnet.layer1)  # (B, 64, 45, 80)
+        self.enc3 = resnet.layer2  #  (B, 128, 22, 40)
+        self.enc4 = resnet.layer3  # (B, 256, 11, 20)
+        self.enc5 = resnet.layer4  # (B, 512, 6, 10)
 
         # Decoder dùng upsample gán theo kích thước skip để tránh lệch kích thước
         self.dec4 = nn.Sequential(
             nn.Conv2d(512 + 256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
         )
         self.dec3 = nn.Sequential(
             nn.Conv2d(256 + 128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
         )
         self.dec2 = nn.Sequential(
             nn.Conv2d(128 + 64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(64 + 64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
 
-        self.heat_head = nn.Conv2d(64, num_keypoints, 1)
-        self.vis_head = nn.Conv2d(64, num_keypoints, 1)
-        self.soft = SoftArgmax2D(temperature=0.5)
+        # Attention nhẹ trong decoder để tăng phân biệt kênh
+
+        # Dùng CoordConv: thêm 2 kênh toạ độ (yy/xx) -> in_channels = 64 + 2
+        self.heat_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.vis_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.soft = SoftArgmax2D(temperature=self.temperature)
+
+    def _coord_channels(self, b: int, h: int, w: int, device, dtype):
+        # Tạo kênh toạ độ chuẩn hoá [0,1]
+        yy = torch.linspace(0, h - 1, h, device=device, dtype=dtype) / (h - 1)
+        xx = torch.linspace(0, w - 1, w, device=device, dtype=dtype) / (w - 1)
+        yy = yy.view(1, 1, h, 1).expand(b, 1, h, w)
+        xx = xx.view(1, 1, 1, w).expand(b, 1, h, w)
+        return yy, xx
 
     def forward(self, x: torch.Tensor):
         b = x.size(0)
 
         # Encoder
-        e1 = self.enc1(x)
+        e1 = self.stemp(x)
         e2 = self.enc2(e1)
         e3 = self.enc3(e2)
         e4 = self.enc4(e3)
         e5 = self.enc5(e4)
 
         # Decoder với skip connection kiểu U-Net
-        d4 = F.interpolate(e5, size=e4.shape[-2:], mode="bilinear", align_corners=False)
-        d4 = self.dec4(torch.cat([d4, e4], dim=1))
-
-        d3 = F.interpolate(d4, size=e3.shape[-2:], mode="bilinear", align_corners=False)
-        d3 = self.dec3(torch.cat([d3, e3], dim=1))
-
+        d4 = F.interpolate(e5, size=e4.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d4 = self.dec4(torch.cat([d4, e4], dim=1)) #concat skip (nối theo kênh)
+        
+        d3 = F.interpolate(d4, size=e3.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d3 = self.dec3(torch.cat([d3, e3], dim=1)) #concat skip (nối theo kênh)
+        
         d2 = F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False)
         d2 = self.dec2(torch.cat([d2, e2], dim=1))
 
         d1 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
         d1 = self.dec1(torch.cat([d1, e1], dim=1))
 
-        heatmaps = self.heat_head(d1)
-        vis_logits = self.vis_head(d1)
+        # Thêm kênh toạ độ trước head
+        b_, c_, h_, w_ = d1.size()
+        yy, xx = self._coord_channels(b_, h_, w_, d1.device, d1.dtype)
+        f = torch.cat([d1, yy, xx], dim=1)
+
+        heatmaps = self.heat_head(f)
+        vis_logits = self.vis_head(f)
 
         y_norm, x_norm = self.soft(heatmaps)
+        # Trở lại phép lấy trung bình không gian để phù hợp với nhãn visibility (0, 0.5, 1)
         vis = torch.sigmoid(vis_logits.mean(dim=(2, 3)))  # (B, K)
 
         coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
         return coords.view(b, -1)
+    
+    def test_forward(self, x: torch.Tensor):
+        b = x.size(0)
+
+        # Encoder
+        e1 = self.stemp(x)
+        print("e1 shape:", e1.shape)
+        e2 = self.enc2(e1)
+        print("e2 shape:", e2.shape)
+        e3 = self.enc3(e2)
+        print("e3 shape:", e3.shape)
+        e4 = self.enc4(e3)
+        print("e4 shape:", e4.shape)
+        e5 = self.enc5(e4)
+        print("e5 shape:", e5.shape)
+
+        
+        # Decoder với skip connection kiểu U-Net
+        d4 = F.interpolate(e5, size=e4.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d4 = self.dec4(torch.cat([d4, e4], dim=1)) #concat skip (nối theo kênh)
+        print("d4 shape:", d4.shape)
+        d3 = F.interpolate(d4, size=e3.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d3 = self.dec3(torch.cat([d3, e3], dim=1)) #concat skip (nối theo kênh)
+        print("d3 shape:", d3.shape)
+        d2 = F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+        print("d2 shape:", d2.shape)
+        d1 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+        print("d1 shape:", d1.shape)
+
+        b_, c_, h_, w_ = d1.size()
+        yy, xx = self._coord_channels(b_, h_, w_, d1.device, d1.dtype)
+        f = torch.cat([d1, yy, xx], dim=1)
+        heatmaps = self.heat_head(f)
+        vis_logits = self.vis_head(f)
+        print("heatmaps shape:", heatmaps.shape)
+        print("vis_logits shape:", vis_logits.shape)
+        y_norm, x_norm = self.soft(heatmaps)
+        vis = torch.sigmoid(vis_logits.mean(dim=(2, 3)))  # (B, K)
+        
+        coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
+        return coords.view(b, -1)
+        
 
 
-if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = Network().to(device)
-    dummy = torch.randn(1, 3, 180, 320, device=device)
-    with torch.no_grad():
-        out = model(dummy)
-    print("output shape:", out.shape)
     
 net = Network(num_keypoints=21, pretrained=True)
-net.__call__()
+x = torch.randn(1, 3, 180, 320)
+#out = net.test_forward(x)
+#print("output shape:", out.shape)

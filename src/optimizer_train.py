@@ -6,12 +6,16 @@ from model_define import net
 import time
 from torchvision import transforms
 
-from using_pretrain import model
+
+import sys, os
+sys.path.append(os.path.dirname(__file__))
 
 torch.manual_seed(42)
 #np.random.seed(42)
 #random.seed(42)
 
+import os
+os.sep = "/"
 
 start_time = time.time()
 
@@ -23,7 +27,7 @@ def load_model_to_train(net,path):
 
 #net = load_model_to_train(net,r"D:\VS Code\vs_code\python\A4\project - Sera CV\model_save\ver_0.13_3.pth")
 
-net = load_model_to_train(net,r"CNN-repo\src\model_save_2\ver_0.8.pth")
+net = load_model_to_train(net,r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.10.5.pth".replace("\\", "/"))
 net = net.to("cuda:0")
 torch.backends.cudnn.benchmark = True
 
@@ -31,7 +35,7 @@ batch_size = 16
 len_train = get_len_batch(batch_size,"train")
 
 #0:2:30 for each epoch
-num_epochs = 6
+num_epochs = 5
 
 #net = model
 #net = net.to("cuda:0")
@@ -52,8 +56,8 @@ def masked_mse_loss(pred, target):
     loss_vis = mse_vis.mean()
 
     return loss_xy + loss_vis
-
-def wing_loss(pred, target, w=10, epsilon=2):
+#w: sai so chap nhan duoc, epsilon: do mem cua ham log
+def wing_loss(pred, target, w=0.01, epsilon=0.004):
     x  = pred - target
     abs_x = torch.abs(x)
     C = w - w * torch.log1p(torch.tensor(w / epsilon).to("cuda:0"))
@@ -62,9 +66,9 @@ def wing_loss(pred, target, w=10, epsilon=2):
     loss_ = loss_(pred, target)
     return [loss.mean(), loss_]
 
-#criterion = masked_mse_loss
+criterion = masked_mse_loss
 #criterion = wing_loss
-criterion = nn.MSELoss()
+#criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(net.parameters(), lr=0.0001)
 
 def load_model_to_val(net, path):
@@ -73,16 +77,13 @@ def load_model_to_val(net, path):
     return net
 
 def train(net,criterion,optimizer,num_epochs):
-    
+    print(optimizer.param_groups[0]['lr'])
     
     for epoch in range(num_epochs):
         train_batch_iter = get_batch(batch_size,"train")
         total_loss = 0.0
         time_epoch = time.time()
         MSE_loss = 0.0
-        
-        
-        
         
         for i in range(len_train):
             
@@ -94,8 +95,9 @@ def train(net,criterion,optimizer,num_epochs):
             optimizer.zero_grad()
 
             outputs = net.forward(inputs)
-            #loss, _ = criterion(outputs, labels.view(-1,63),10,2) #
-            loss = criterion(outputs, labels.view(-1,63))
+            #loss, _ = criterion(outputs, labels.view(-1,63),0.015,0.008) #
+            #loss = criterion(outputs, labels.view(-1,63))
+            loss = criterion(outputs, labels.view(-1,63)) #
             loss.backward()
             optimizer.step()
             total_loss += loss.item()*batch_size
@@ -118,11 +120,12 @@ def train(net,criterion,optimizer,num_epochs):
         time_1_epoch  = time.time() - time_epoch
         
         print(f"Time for 1 epoch: {time_1_epoch} seconds")
-        
+        net.epoch += 1
+        net.temperature = max(0.5 - net.epoch * 0.02, 0.1)
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss}')
         #print("MSE loss: "  , MSE_loss) #
     print("Training complete.")
-    save_path = r"CNN-repo\src\model_save_2\ver_0.9.1.pth"
+    save_path = r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.10.6.pth".replace("\\", "/")
     torch.save(net.state_dict(), save_path)
     torch.cuda.empty_cache()
     
@@ -156,7 +159,7 @@ def validation (net,criterion):
         print("avg_loss-1 sample: ", total_loss / get_len_batch(batch_size,"val"))
 
 
-#net = load_model_to_train(net, r"CNN-repo\src\model_save_2\ver_0.4.7.pth")
+#net = load_model_to_train(net, r"CNN-handkp/src/model_save_2/ver_0.4.7.pth".replace("\\", "/"))
 #validation(net,criterion)
 
 

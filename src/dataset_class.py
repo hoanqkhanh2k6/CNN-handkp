@@ -13,16 +13,31 @@ import torchvision
 from torchvision import transforms,models
 import torch
 
+
 #Mean: tensor([0.3799, 0.3541, 0.3407])
 #Std: tensor([0.3728, 0.3592, 0.3544])
 
-torch.manual_seed(42)
-np.random.seed(42)
-random.seed(42)
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
+# -> CNN-handkp/src
 
+# Resolve padding background image with environment-aware fallback
+_colab_pad = r"/content/drive/MyDrive/project - Sera CV/dataset/IMG_6437.jpg".replace("\\", "/")
+_local_pad_dir = osp.join(BASE_DIR, "pad_img")
+_local_pad_candidates = sorted(glob.glob(osp.join(_local_pad_dir, "*.jpg"))) + \
+                        sorted(glob.glob(osp.join(_local_pad_dir, "*.png")))
+if os.path.exists(_colab_pad):
+    _pad_img_path = _colab_pad
+elif _local_pad_candidates:
+    _pad_img_path = _local_pad_candidates[0]
+else:
+    _pad_img_path = None
 
-pad_img_path  = [r"CNN-repo\src\pad_img\IMG_6437.jpg",]
-pad_img = Image.open(pad_img_path[0])
+if _pad_img_path and os.path.exists(_pad_img_path):
+    pad_img = Image.open(_pad_img_path)
+else:
+    # Fallback: solid gray image to avoid crashes if no file is present
+    pad_img = Image.new("RGB", (320, 180), color=(127, 127, 127))
 
 class PaddingImage:
     def __init__(self,size):
@@ -51,21 +66,22 @@ class PaddingImage:
 paddingImage = PaddingImage((180,180))
 
 def make_listdata(phase = "train"):
-    # use absolute path like get_label to avoid relative-path mistakes
-    rootpath = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\images"
-    target_path = osp.join(rootpath,phase,'*.jpg')
-    path_list =[]
-    for path in glob.glob(target_path):
-        path_list.append(path)
+    # Prefer Colab path when available, else use local workspace dataset
+    colab_root = r"/content/data/project - Sera CV/dataset/hand_keypoint_dataset_26k/hand_keypoint_dataset_26k/images".replace("\\", "/")
+    local_root = osp.join(BASE_DIR, "..", "..", "dataset", "hand_keypoint_dataset_26k", "hand_keypoint_dataset_26k", "images")
+    rootpath = colab_root if os.path.exists(colab_root) else local_root
+
+    target_path = osp.join(rootpath, phase, '*.jpg')
+    path_list = sorted(glob.glob(target_path))
     return path_list
 
 def get_label(phase):
-    rootpath = r"dataset\hand_keypoint_dataset_26k\hand_keypoint_dataset_26k\labels"
+    colab_root = r"/content/data/project - Sera CV/dataset/hand_keypoint_dataset_26k/hand_keypoint_dataset_26k/labels".replace("\\", "/")
+    local_root = osp.join(BASE_DIR, "..", "..", "dataset", "hand_keypoint_dataset_26k", "hand_keypoint_dataset_26k", "labels")
+    rootpath = colab_root if os.path.exists(colab_root) else local_root
 
-    label_list =[]
-    target_path = osp.join(rootpath,phase,'*.txt')
-    for path in glob.glob(target_path):
-        label_list.append(path)
+    target_path = osp.join(rootpath, phase, '*.txt')
+    label_list = sorted(glob.glob(target_path))
     return label_list
 
 class ImageTransform:
@@ -82,18 +98,17 @@ class ImageTransform:
         self.data_transform = {
             'train': transforms.Compose([
                 transforms.ColorJitter(
-                    brightness=0.15,   # thay đổi độ sáng tối đa ±30%
-                    contrast=0.15 ,  # thay đổi độ tương phản ±30%
-                    saturation=0.1,  # thay đổi độ bão hòa ±30%
-                    hue=0.1          # thay đổi sắc độ ±0.1
+                    brightness=0.25,   # thay đổi độ sáng tối đa ±30%
+                    contrast=0.25 ,  # thay đổi độ tương phản ±30%
+                    saturation=0.2,  # thay đổi độ bão hòa ±30%
+                    hue=0.15          # thay đổi sắc độ ±0.1
                 ),
+                transforms.ToTensor()]),
+            
+            'val': transforms.Compose([
+                transforms.Resize(resize_hw),
                 transforms.ToTensor(),
                 
-            ]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(resize_hw),
-                transforms.ToTensor(),
-
             ])
         }
     def __call__(self, img, phase):
@@ -110,21 +125,21 @@ class Dataset(data.Dataset):
         self.phase = phase
 
         self.img_pad = PaddingImage((180,180))
-        self.pad = random.randint(0,140)
-        
-        
 
     def __len__(self):
         return len(self.file_list)
 
     def __getitem__(self, index):
+        if (self.phase == 'train'):
+            pad = random.randint(0,140)
+        else:
+            pad = 70
+        
         img_path = self.file_list[index]
         img = Image.open(img_path)
          
-        if (index % 500 == 0):
-            self.pad = random.randint(0,140)
             
-        img = self.img_pad(img,self.pad,self.phase) #320x180
+        img = self.img_pad(img,pad,self.phase) #320x180
         img_trans = self.transform(img, self.phase)
         # ensure image tensor has dtype float32
         if isinstance(img_trans, torch.Tensor):
@@ -139,7 +154,7 @@ class Dataset(data.Dataset):
                     lst.append(round(float(parts[i]),5))
                 label = []
                 for i in range(0,len(lst),3):
-                    lst[i]  = lst[i] * (180.0/320.0) + (self.pad/320.0)  # x
+                    lst[i]  = lst[i] * (180.0/320.0) + (pad/320.0)  # x
                     label.append([lst[i],lst[i+1],lst[i+2]/2])
                 label = torch.tensor(label,dtype = torch.float32)
 
@@ -152,7 +167,7 @@ class Dataset(data.Dataset):
                     lst.append(round(float(parts[i]),5))
                 label = []
                 for i in range(0,len(lst),3):
-                    lst[i]  = lst[i] * (180.0/320.0) + (self.pad/320.0)  # x
+                    lst[i]  = lst[i] * (180.0/320.0) + (pad/320.0)  # x
                     label.append([lst[i],lst[i+1],lst[i+2]/2])
                 label = torch.tensor(label,dtype = torch.float32)
                     
@@ -175,11 +190,23 @@ data_transform = ImageTransform(size)
 def get_batch(batch_size,phase = "train"):
     if (phase == "train"):
         dataset = Dataset(data_list=list_train, labels_list=labels_train, transform=data_transform, phase='train')
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            pin_memory=torch.cuda.is_available(),
+        )
         return iter(dataloader)
     else:
         dataset = Dataset(data_list=list_val, labels_list=labels_val, transform=data_transform, phase='val')
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=torch.cuda.is_available(),
+        )
         return iter(dataloader)
 
 
