@@ -27,7 +27,7 @@ def load_model_to_train(net,path):
 
 #net = load_model_to_train(net,r"D:\VS Code\vs_code\python\A4\project - Sera CV\model_save\ver_0.13_3.pth")
 
-net = load_model_to_train(net,r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.10.5.pth".replace("\\", "/"))
+net = load_model_to_train(net,r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.11.1.pth".replace("\\", "/"))
 net = net.to("cuda:0")
 torch.backends.cudnn.benchmark = True
 
@@ -56,20 +56,36 @@ def masked_mse_loss(pred, target):
     loss_vis = mse_vis.mean()
 
     return loss_xy + loss_vis
-#w: sai so chap nhan duoc, epsilon: do mem cua ham log
-def wing_loss(pred, target, w=0.01, epsilon=0.004):
-    x  = pred - target
-    abs_x = torch.abs(x)
-    C = w - w * torch.log1p(torch.tensor(w / epsilon).to("cuda:0"))
-    loss = torch.where(abs_x < w, w * torch.log1p(abs_x / epsilon), abs_x - C)
-    loss_ = nn.MSELoss()
-    loss_ = loss_(pred, target)
-    return [loss.mean(), loss_]
+# w: sai so chap nhan duoc, epsilon: do mem cua ham log
+def masked_wing_loss(pred, target, w=0.01, epsilon=0.004):
+    pred = pred.view(-1, 21, 3)
+    target = target.view(-1, 21, 3)
+
+    vis_mask = (target[..., 2] > 0).unsqueeze(-1)  # (batch, 21, 1)
+    diff_xy = pred[..., :2] - target[..., :2]
+    abs_xy = torch.abs(diff_xy)
+
+    w_t = torch.tensor(w, device=pred.device, dtype=pred.dtype)
+    eps_t = torch.tensor(epsilon, device=pred.device, dtype=pred.dtype)
+    c = w_t - w_t * torch.log1p(w_t / eps_t)
+    wing_xy = torch.where(
+        abs_xy < w_t,
+        w_t * torch.log1p(abs_xy / eps_t),
+        abs_xy - c,
+    )
+    masked_wing_xy = wing_xy * vis_mask
+    denom_xy = vis_mask.sum() * 2 if vis_mask.sum() > 0 else 1.0
+    loss_xy = masked_wing_xy.sum() / denom_xy
+
+    mse_vis = (pred[..., 2] - target[..., 2]) ** 2
+    loss_vis = mse_vis.mean()
+
+    return loss_xy + loss_vis
 
 criterion = masked_mse_loss
 #criterion = wing_loss
 #criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(net.parameters(), lr=0.0001)
+optimizer = torch.optim.Adam(net.parameters(), lr=0.0003)
 
 def load_model_to_val(net, path):
     net.load_state_dict(torch.load(path))
@@ -125,7 +141,7 @@ def train(net,criterion,optimizer,num_epochs):
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss}')
         #print("MSE loss: "  , MSE_loss) #
     print("Training complete.")
-    save_path = r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.10.6.pth".replace("\\", "/")
+    save_path = r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.11.2.pth".replace("\\", "/")
     torch.save(net.state_dict(), save_path)
     torch.cuda.empty_cache()
     
