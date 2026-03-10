@@ -180,11 +180,3 @@ class Network(nn.Module):
         
         coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
         return coords.view(b, -1)
-        
-
-
-    
-net = Network(num_keypoints=21, pretrained=True)
-x = torch.randn(1, 3, 180, 320)
-#out = net.test_forward(x)
-#print("output shape:", out.shape)

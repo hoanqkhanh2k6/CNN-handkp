@@ -12,7 +12,7 @@ def load_model_val(path):
     net.eval()
     return net
 
-net = load_model_val(r"CNN-handkp/src/model_save_2/ver_0.10.5.pth")
+net = load_model_val(r"CNN-handkp/src/model_save_2/ver_0.12.4.pth")
 
 cap = cv2.VideoCapture(0)
 

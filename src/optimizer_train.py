@@ -27,7 +27,7 @@ def load_model_to_train(net,path):
 
 #net = load_model_to_train(net,r"D:\VS Code\vs_code\python\A4\project - Sera CV\model_save\ver_0.13_3.pth")
 
-net = load_model_to_train(net,r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.11.1.pth".replace("\\", "/"))
+#net = load_model_to_train(net,r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.12.3.pth".replace("\\", "/"))
 net = net.to("cuda:0")
 torch.backends.cudnn.benchmark = True
 
@@ -35,7 +35,7 @@ batch_size = 16
 len_train = get_len_batch(batch_size,"train")
 
 #0:2:30 for each epoch
-num_epochs = 5
+num_epochs = 8
 
 #net = model
 #net = net.to("cuda:0")
@@ -58,8 +58,10 @@ def masked_mse_loss(pred, target):
     return loss_xy + loss_vis
 # w: sai so chap nhan duoc, epsilon: do mem cua ham log
 def masked_wing_loss(pred, target, w=0.01, epsilon=0.004):
-    pred = pred.view(-1, 21, 3)
-    target = target.view(-1, 21, 3)
+    pred_flat = pred.view(-1, 63)
+    target_flat = target.view(-1, 63)
+    pred = pred_flat.view(-1, 21, 3)
+    target = target_flat.view(-1, 21, 3)
 
     vis_mask = (target[..., 2] > 0).unsqueeze(-1)  # (batch, 21, 1)
     diff_xy = pred[..., :2] - target[..., :2]
@@ -79,13 +81,40 @@ def masked_wing_loss(pred, target, w=0.01, epsilon=0.004):
 
     mse_vis = (pred[..., 2] - target[..., 2]) ** 2
     loss_vis = mse_vis.mean()
+    aux_mse = nn.functional.mse_loss(pred_flat, target_flat)
 
-    return loss_xy + loss_vis
+    return loss_xy + loss_vis, aux_mse
 
-criterion = masked_mse_loss
+# w: sai so chap nhan duoc, epsilon: do mem cua ham log
+def wing_loss(pred, target, w=0.01, epsilon=0.004):
+    pred_flat = pred.view(-1, 63)
+    target_flat = target.view(-1, 63)
+    pred = pred_flat.view(-1, 21, 3)
+    target = target_flat.view(-1, 21, 3)
+
+    diff_xy = pred[..., :2] - target[..., :2]
+    abs_xy = torch.abs(diff_xy)
+
+    w_t = torch.tensor(w, device=pred.device, dtype=pred.dtype)
+    eps_t = torch.tensor(epsilon, device=pred.device, dtype=pred.dtype)
+    c = w_t - w_t * torch.log1p(w_t / eps_t)
+    wing_xy = torch.where(
+        abs_xy < w_t,
+        w_t * torch.log1p(abs_xy / eps_t),
+        abs_xy - c,
+    )
+    loss_xy = wing_xy.mean()
+
+    mse_vis = (pred[..., 2] - target[..., 2]) ** 2
+    loss_vis = mse_vis.mean()
+    aux_mse = nn.functional.mse_loss(pred_flat, target_flat)
+
+    return loss_xy + loss_vis, aux_mse
+
+#criterion = masked_mse_loss
 #criterion = wing_loss
-#criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(net.parameters(), lr=0.0003)
+criterion = nn.MSELoss()
+optimizer = torch.optim.AdamW(net.parameters(), lr=0.001)
 
 def load_model_to_val(net, path):
     net.load_state_dict(torch.load(path))
@@ -111,9 +140,9 @@ def train(net,criterion,optimizer,num_epochs):
             optimizer.zero_grad()
 
             outputs = net.forward(inputs)
-            #loss, _ = criterion(outputs, labels.view(-1,63),0.015,0.008) #
-            #loss = criterion(outputs, labels.view(-1,63))
-            loss = criterion(outputs, labels.view(-1,63)) #
+            #loss,_ = criterion(outputs, labels.view(-1,63),0.015,0.008) #
+            loss = criterion(outputs, labels.view(-1,63))
+            
             loss.backward()
             optimizer.step()
             total_loss += loss.item()*batch_size
@@ -136,12 +165,14 @@ def train(net,criterion,optimizer,num_epochs):
         time_1_epoch  = time.time() - time_epoch
         
         print(f"Time for 1 epoch: {time_1_epoch} seconds")
+        
         net.epoch += 1
         net.temperature = max(0.5 - net.epoch * 0.02, 0.1)
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss}')
-        #print("MSE loss: "  , MSE_loss) #
+        if MSE_loss > 0:
+            print("MSE loss: "  , MSE_loss)
     print("Training complete.")
-    save_path = r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.11.2.pth".replace("\\", "/")
+    save_path = r"/content/drive/MyDrive/project - Sera CV/CNN-handkp/src/model_save_2/ver_0.15.pth".replace("\\", "/")
     torch.save(net.state_dict(), save_path)
     torch.cuda.empty_cache()
     

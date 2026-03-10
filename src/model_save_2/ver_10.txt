@@ -11,13 +11,16 @@ class SoftArgmax2D(nn.Module):
 
     def __init__(self, temperature: float = 0.5):
         super().__init__()
-        self.temperature = float(temperature)
+        # Học nhiệt độ (log-param) để tối ưu độ sắc của heatmap an toàn
+        self.log_temperature = nn.Parameter(torch.log(torch.tensor(float(temperature))))
 
     def forward(self, x: torch.Tensor):
         # x: (B, C, H, W)
         b, c, h, w = x.size()
         x_flat = x.view(b, c, -1)
-        x_scaled = x_flat / max(self.temperature, 1e-6)
+        # temperature học được, clamp để ổn định số học
+        temperature = torch.clamp(torch.exp(self.log_temperature), min=1e-3, max=10.0)
+        x_scaled = x_flat / temperature
         x_scaled = x_scaled - x_scaled.max(dim=-1, keepdim=True).values
         softmaxed = F.softmax(x_scaled, dim=-1)
 
@@ -45,21 +48,19 @@ class Network(nn.Module):
     def __init__(self, num_keypoints: int = 21, pretrained: bool = True):
         
         self.epoch = 0
-        
-        
-        
+        self.temperature = 0.5
         
         super().__init__()
+        # Dùng backbone ResNet34 nhẹ hơn 
         weights = (
             torchvision.models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
         )
         resnet = torchvision.models.resnet34(weights=weights)
-
         # Encoder lấy trực tiếp từ ResNet34
         self.stemp = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu)  # (B, 64, 90, 160)
-        self.enc2 = nn.Sequential(resnet.maxpool, resnet.layer1)  # (B, 128, 45, 80)
-        self.enc3 = resnet.layer2  # (B, 256, 23, 40)
-        self.enc4 = resnet.layer3  # (B, 512, 12, 20)
+        self.enc2 = nn.Sequential(resnet.maxpool, resnet.layer1)  # (B, 64, 45, 80)
+        self.enc3 = resnet.layer2  #  (B, 128, 22, 40)
+        self.enc4 = resnet.layer3  # (B, 256, 11, 20)
         self.enc5 = resnet.layer4  # (B, 512, 6, 10)
 
         # Decoder dùng upsample gán theo kích thước skip để tránh lệch kích thước
@@ -80,13 +81,24 @@ class Network(nn.Module):
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(64 + 64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
-        
 
-        self.heat_head = nn.Conv2d(64, num_keypoints, 1)
-        self.vis_head = nn.Conv2d(64, num_keypoints, 1)
-        self.soft = SoftArgmax2D(temperature=0.5)
+        # Attention nhẹ trong decoder để tăng phân biệt kênh
+
+        # Dùng CoordConv: thêm 2 kênh toạ độ (yy/xx) -> in_channels = 64 + 2
+        self.heat_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.vis_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.soft = SoftArgmax2D(temperature=self.temperature)
+
+    def _coord_channels(self, b: int, h: int, w: int, device, dtype):
+        # Tạo kênh toạ độ chuẩn hoá [0,1]
+        yy = torch.linspace(0, h - 1, h, device=device, dtype=dtype) / (h - 1)
+        xx = torch.linspace(0, w - 1, w, device=device, dtype=dtype) / (w - 1)
+        yy = yy.view(1, 1, h, 1).expand(b, 1, h, w)
+        xx = xx.view(1, 1, 1, w).expand(b, 1, h, w)
+        return yy, xx
 
     def forward(self, x: torch.Tensor):
         b = x.size(0)
@@ -111,10 +123,16 @@ class Network(nn.Module):
         d1 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
         d1 = self.dec1(torch.cat([d1, e1], dim=1))
 
-        heatmaps = self.heat_head(d1)
-        vis_logits = self.vis_head(d1)
+        # Thêm kênh toạ độ trước head
+        b_, c_, h_, w_ = d1.size()
+        yy, xx = self._coord_channels(b_, h_, w_, d1.device, d1.dtype)
+        f = torch.cat([d1, yy, xx], dim=1)
+
+        heatmaps = self.heat_head(f)
+        vis_logits = self.vis_head(f)
 
         y_norm, x_norm = self.soft(heatmaps)
+        # Trở lại phép lấy trung bình không gian để phù hợp với nhãn visibility (0, 0.5, 1)
         vis = torch.sigmoid(vis_logits.mean(dim=(2, 3)))  # (B, K)
 
         coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
@@ -150,8 +168,11 @@ class Network(nn.Module):
         d1 = self.dec1(torch.cat([d1, e1], dim=1))
         print("d1 shape:", d1.shape)
 
-        heatmaps = self.heat_head(d1)
-        vis_logits = self.vis_head(d1)
+        b_, c_, h_, w_ = d1.size()
+        yy, xx = self._coord_channels(b_, h_, w_, d1.device, d1.dtype)
+        f = torch.cat([d1, yy, xx], dim=1)
+        heatmaps = self.heat_head(f)
+        vis_logits = self.vis_head(f)
         print("heatmaps shape:", heatmaps.shape)
         print("vis_logits shape:", vis_logits.shape)
         y_norm, x_norm = self.soft(heatmaps)
@@ -159,17 +180,90 @@ class Network(nn.Module):
         
         coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
         return coords.view(b, -1)
-        
 
 
-    
-net = Network(num_keypoints=21, pretrained=True)
-x = torch.randn(1, 3, 180, 320)
-out = net.test_forward(x)
-print("output shape:", out.shape)
+train by gg colab
+
+lr = 0.001
+Time for 1 epoch: 351.4367980957031 seconds
+Epoch [1/5], Loss: 161.05181255564094
+Time for 1 epoch: 361.55264949798584 seconds
+Epoch [2/5], Loss: 83.89980282634497
+Time for 1 epoch: 359.5377984046936 seconds
+Epoch [3/5], Loss: 73.11363982688636
+Epoch [4/5], Loss: 63.516610184218735
+Epoch [5/5], Loss: 57.78570970892906
+
+lr = 0.0001
+Epoch [1/5], Loss: 42.69313413021155
+Epoch [2/5], Loss: 37.06534779933281
+Epoch [3/5], Loss: 35.49372817133553
+Epoch [5/5], Loss: 31.143255785806105
+
+wing_loss
+Epoch [1/5], Loss: 1209.775402277708
+MSE loss:  47.62345167656895
+Epoch [2/5], Loss: 1116.3752208948135
+MSE loss:  50.04300590604544
+
+Epoch [5/5], Loss: 922.9084863066673
+MSE loss:  42.75672336615389
+
+lr = 0.0001
+Time for 1 epoch: 345.6141109466553 seconds
+Epoch [1/8], Loss: 772.7121311575174
+MSE loss:  33.76699218113208
+Epoch [3/8], Loss: 710.6840219646692
+MSE loss:  30.849878589389846
 
 
-Time for 1 epoch: 347.29245805740356 seconds
-Epoch [1/5], Loss: 397.08649484813213
+Time for 1 epoch: 342.6549263000488 seconds
+Epoch [7/8], Loss: 654.1484116017818
+MSE loss:  28.09493369772099
+Epoch [8/8], Loss: 641.7248040288687
+MSE loss:  27.146778902009828
+
+        0.004757, 0.002274, 0.000000, 0.013821, 0.008211, 0.000000, 0.005731,
+        0.002735, 0.000000, 0.005171, 0.002827, 0.000000, 0.005540, 0.000070,
+        0.000027, 0.008365, 0.012381, 0.000000, 0.000496, 0.004523, 0.000000,
+        0.000332, 0.003635, 0.000000, 0.000203, 0.002598, 0.000000, 0.004787,
+        0.001242, 0.000000, 0.003638, 0.001129, 0.000000, 0.004303, 0.005754,
+        0.000000, 0.003636, 0.009203, 0.000000, 0.007073, 0.003575, 0.000000,
+        0.000224, 0.000260, 0.000000, 0.003325, 0.007179, 0.000000, 0.003705,
+        0.004874, 0.000000, 0.002577, 0.017774, 0.000000, 0.000802, 0.006294,
+        0.000000, 0.002505, 0.004034, 0.000000, 0.005095, 0.001303, 0.000000
+
+lr = 0.00003
+Epoch [1/8], Loss: 618.8889452666044
+MSE loss:  25.806660846574232
+Epoch [7/8], Loss: 593.867645457387
+MSE loss:  24.71387613180559
+Epoch [8/8], Loss: 592.3480460941792
+MSE loss:  24.687658241047757
 
 
+lr = 0.0001, wing_loss: w = 0.01, e = 0.04
+Epoch [1/8], Loss: 155.8848419226706
+MSE loss:  25.507814802782377
+Epoch [2/8], Loss: 154.8088950663805
+MSE loss:  25.82170263849548
+Epoch [4/8], Loss: 150.5983739644289
+MSE loss:  24.382713854283793
+Epoch [5/8], Loss: 149.1539610400796
+MSE loss:  24.015160703653237
+Epoch [8/8], Loss: 145.59055030345917
+MSE loss:  23.813515484740492
+
+lr = 0.00002
+Epoch [1/5], Loss: 143.440179053694
+MSE loss:  24.761267370224232
+Epoch [5/5], Loss: 140.68354727327824
+MSE loss:  23.982007342099678
+
+*** validation
+Validation Loss: 26.280338772572577
+Time for validation: 45.44746160507202 seconds
+avg_loss-1 sample:  0.052666009564273704
+***
+
+masked_mse_loss:

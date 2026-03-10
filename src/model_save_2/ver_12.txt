@@ -1,0 +1,199 @@
+class SoftArgmax2D(nn.Module):
+    """Soft-argmax 2D với nhiệt độ cố định để tăng độ sắc của đỉnh phân bố."""
+
+    def __init__(self, temperature: float = 0.2):
+        super().__init__()
+        # Học nhiệt độ (log-param) để tối ưu độ sắc của heatmap an toàn
+        self.log_temperature = nn.Parameter(torch.log(torch.tensor(float(temperature))))
+
+    def forward(self, x: torch.Tensor):
+        # x: (B, C, H, W)
+        b, c, h, w = x.size()
+        x_flat = x.view(b, c, -1)
+        # temperature học được, clamp để ổn định số học
+        temperature = torch.clamp(torch.exp(self.log_temperature), min=1e-3, max=10.0)
+        x_scaled = x_flat / temperature
+        x_scaled = x_scaled - x_scaled.max(dim=-1, keepdim=True).values
+        softmaxed = F.softmax(x_scaled, dim=-1)
+
+        yy = (
+            torch.linspace(0, h - 1, h, device=x.device, dtype=x.dtype)
+            .view(1, 1, h, 1)
+            .expand(b, c, h, w)
+            .contiguous()
+            .view(b, c, -1)
+        )
+        xx = (
+            torch.linspace(0, w - 1, w, device=x.device, dtype=x.dtype)
+            .view(1, 1, 1, w)
+            .expand(b, c, h, w)
+            .contiguous()
+            .view(b, c, -1)
+        )
+
+        y_norm = (softmaxed * yy).sum(dim=-1) / (h - 1)
+        x_norm = (softmaxed * xx).sum(dim=-1) / (w - 1)
+        return y_norm, x_norm
+
+
+class Network(nn.Module):
+    def __init__(self, num_keypoints: int = 21, pretrained: bool = True):
+        
+        self.epoch = 0
+        self.temperature = 0.2
+        
+        super().__init__()
+        # Dùng backbone ResNet34 nhẹ hơn 
+        weights = (
+            torchvision.models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+        )
+        resnet = torchvision.models.resnet34(weights=weights)
+        # Encoder lấy trực tiếp từ ResNet34
+        self.stemp = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu)  # (B, 64, 90, 160)
+        self.enc2 = nn.Sequential(resnet.maxpool, resnet.layer1)  # (B, 64, 45, 80)
+        self.enc3 = resnet.layer2  #  (B, 128, 22, 40)
+        self.enc4 = resnet.layer3  # (B, 256, 11, 20)
+        self.enc5 = resnet.layer4  # (B, 512, 6, 10)
+
+        # Decoder dùng upsample gán theo kích thước skip để tránh lệch kích thước
+        self.dec4 = nn.Sequential(
+            nn.Conv2d(512 + 256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(256 + 128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(128 + 64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            
+            
+        )
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(64 + 64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+
+        # Attention nhẹ trong decoder để tăng phân biệt kênh
+
+        # Dùng CoordConv: thêm 2 kênh toạ độ (yy/xx) -> in_channels = 64 + 2
+        self.heat_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.vis_head = nn.Conv2d(64 + 2, num_keypoints, 1)
+        self.soft = SoftArgmax2D(temperature=self.temperature)
+
+    def _coord_channels(self, b: int, h: int, w: int, device, dtype):
+        # Tạo kênh toạ độ chuẩn hoá [0,1]
+        yy = torch.linspace(0, h - 1, h, device=device, dtype=dtype) / (h - 1)
+        xx = torch.linspace(0, w - 1, w, device=device, dtype=dtype) / (w - 1)
+        yy = yy.view(1, 1, h, 1).expand(b, 1, h, w)
+        xx = xx.view(1, 1, 1, w).expand(b, 1, h, w)
+        return yy, xx
+
+    def forward(self, x: torch.Tensor):
+        b = x.size(0)
+
+        # Encoder
+        e1 = self.stemp(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
+        e4 = self.enc4(e3)
+        e5 = self.enc5(e4)
+
+        # Decoder với skip connection kiểu U-Net
+        d4 = F.interpolate(e5, size=e4.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d4 = self.dec4(torch.cat([d4, e4], dim=1)) #concat skip (nối theo kênh)
+        
+        d3 = F.interpolate(d4, size=e3.shape[-2:], mode="bilinear", align_corners=False) # upsample
+        d3 = self.dec3(torch.cat([d3, e3], dim=1)) #concat skip (nối theo kênh)
+        
+        d2 = F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+
+        d1 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+
+        # Thêm kênh toạ độ trước head
+        b_, c_, h_, w_ = d1.size()
+        yy, xx = self._coord_channels(b_, h_, w_, d1.device, d1.dtype)
+        f = torch.cat([d1, yy, xx], dim=1)
+
+        heatmaps = self.heat_head(f)
+        vis_logits = self.vis_head(f)
+
+        y_norm, x_norm = self.soft(heatmaps)
+        # Trở lại phép lấy trung bình không gian để phù hợp với nhãn visibility (0, 0.5, 1)
+        vis = torch.sigmoid(vis_logits.mean(dim=(2, 3)))  # (B, K)
+
+        coords = torch.stack([x_norm, y_norm, vis], dim=-1)  # (B, K, 3)
+        return coords.view(b, -1)
+
+lr = 0.001
+Time for 1 epoch: 384.08263874053955 seconds
+Epoch [1/10], Loss: 179.95914515294135
+Time for 1 epoch: 381.9046630859375 seconds
+Epoch [2/10], Loss: 97.41787724755704
+Time for 1 epoch: 382.4437355995178 seconds
+Epoch [3/10], Loss: 84.72253019642085
+
+Time for 1 epoch: 379.4745845794678 seconds
+Epoch [6/10], Loss: 65.18231284292415
+
+Time for 1 epoch: 380.83632159233093 seconds
+Epoch [9/10], Loss: 49.478274644352496
+Time for 1 epoch: 381.36043524742126 seconds
+Epoch [10/10], Loss: 44.88505152007565
+
+lr = 0.0001
+Time for 1 epoch: 388.00246262550354 seconds
+Epoch [1/8], Loss: 38.41619152203202
+Time for 1 epoch: 368.68158626556396 seconds
+Epoch [2/8], Loss: 33.12261185236275
+
+Time for 1 epoch: 367.6640555858612 seconds
+Epoch [6/8], Loss: 27.579156877938658
+Time for 1 epoch: 370.66491866111755 seconds
+Epoch [7/8], Loss: 26.39684800617397
+Time for 1 epoch: 368.4812033176422 seconds
+Epoch [8/8], Loss: 25.925404065288603
+
+wing_loss
+Epoch [1/8], Loss: 346.7694164067507
+MSE loss:  24.55310235801153
+Epoch [2/8], Loss: 331.8860824853182
+MSE loss:  24.060292894952
+
+Epoch [5/8], Loss: 303.746111869812
+MSE loss:  22.513216973049566
+
+Epoch [7/8], Loss: 289.14446421712637
+MSE loss:  21.352149764308706
+Epoch [8/8], Loss: 281.7200008556247
+MSE loss:  20.569106412585825
+
+lr = 0.0005
+Epoch [1/5], Loss: 272.374890178442
+MSE loss:  19.51184655504767
+
+Epoch [5/5], Loss: 259.32533772289753
+MSE loss:  18.322525652125478
+
+lr = 0.0001
+Epoch [5/5], Loss: 249.77996618300676
+MSE loss:  17.007515039062127

@@ -15,7 +15,7 @@ def load_model_val(path):
     net.eval()
     return net
 
-net = load_model_val(r"CNN-handkp/src/model_save_2/ver_0.10.5.pth")
+net = load_model_val(r"CNN-handkp/src/model_save_2/ver_0.12.3.pth")
 
 Mean = [0.3799, 0.3541, 0.3407]
 Std = [0.3728, 0.3592, 0.3544]
